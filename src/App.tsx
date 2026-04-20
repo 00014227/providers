@@ -5,17 +5,20 @@ import RateRequestsPage from './pages/RateRequestsPage';
 import NewRateRequestPage from './pages/NewRateRequestPage';
 import RateRequestDetailPage from './pages/RateRequestDetailPage';
 import PublicRatePage from './pages/PublicRatePage';
+import ShipmentsPage from './pages/ShipmentsPage';
+import NewShipmentPage from './pages/NewShipmentPage';
+import ShipmentDetailPage from './pages/ShipmentDetailPage';
 
 export default function App() {
   return (
     <BrowserRouter>
       <Routes>
-        {/* Public page — no layout */}
         <Route path="/rate/:token" element={<PublicRatePage />} />
-
-        {/* App with sidebar */}
         <Route element={<Layout />}>
-          <Route index element={<Navigate to="/rate-requests" replace />} />
+          <Route index element={<Navigate to="/shipments" replace />} />
+          <Route path="/shipments" element={<ShipmentsPage />} />
+          <Route path="/shipments/new" element={<NewShipmentPage />} />
+          <Route path="/shipments/:id" element={<ShipmentDetailPage />} />
           <Route path="/rate-requests" element={<RateRequestsPage />} />
           <Route path="/rate-requests/new" element={<NewRateRequestPage />} />
           <Route path="/rate-requests/:id" element={<RateRequestDetailPage />} />

@@ -1,15 +1,21 @@
-import { useState } from 'react';
-import { useNavigate } from 'react-router-dom';
-import { ChevronRight, ChevronLeft, Check, MapPin, Package, Users, Send, Eye, X } from 'lucide-react';
-import { CONTRACTORS, TransportType, TRANSPORT_LABELS } from '../data/mock';
-import { Button } from '../components/ui/button';
-import { Input } from '../components/ui/input';
-import { Label } from '../components/ui/label';
-import { Textarea } from '../components/ui/textarea';
-import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '../components/ui/select';
-import { Card, CardContent, CardHeader, CardTitle } from '../components/ui/card';
-import { Badge } from '../components/ui/badge';
-import { cn } from '../lib/utils';
+import { useState, useMemo, useEffect } from 'react';
+import { useNavigate, useSearchParams } from 'react-router-dom';
+import {
+  ChevronRight, ChevronLeft, Check, Package, Users, Send, Eye, X,
+  Sparkles, UserCheck, ChevronDown, ChevronUp, Star, Link2,
+} from 'lucide-react';
+import { CONTRACTORS, SHIPMENTS, TransportType, TRANSPORT_LABELS } from '../data/mock';
+import { matchContractors, vehicleToTransportType } from '@/lib/contractor-matcher';
+import { Button } from '@/components/ui/button';
+import { Input } from '@/components/ui/input';
+import { Label } from '@/components/ui/label';
+import { Textarea } from '@/components/ui/textarea';
+import {
+  Select, SelectContent, SelectItem, SelectTrigger, SelectValue,
+} from '@/components/ui/select';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { Badge } from '@/components/ui/badge';
+import { cn } from '@/lib/utils';
 
 type Step = 1 | 2 | 3;
 
@@ -52,44 +58,96 @@ interface Form {
   channels: Record<string, 'email' | 'telegram' | 'both'>;
 }
 
-const TRANSPORT_TYPES: TransportType[] = ['auto', 'rail', 'air', 'sea'];
-
 export default function NewRateRequestPage() {
   const navigate = useNavigate();
+  const [searchParams] = useSearchParams();
   const [step, setStep] = useState<Step>(1);
-  const [form, setForm] = useState<Form>({
-    requestDate: new Date().toISOString().split('T')[0],
-    status: 'new',
-    fromCity: '',
-    fromIndex: '',
-    fromCountry: '',
-    toCity: '',
-    toIndex: '',
-    toCountry: '',
-    loadingDate: '',
-    weightKg: '',
-    cargoValueUsd: '',
-    cargoType: 'general',
-    vehicleCount: '1',
-    vehicleType: 'truck',
-    loadingMethod: 'rear',
-    hsCodes: [],
-    exportCustoms: '',
-    importCustoms: '',
-    incoterms: '',
-    currency: 'USD',
-    auctionDurationMin: '60',
-    specialConditions: '',
-    comment: '',
-    selectedContractors: [],
-    channels: {},
+  const [showManual, setShowManual] = useState(false);
+  const [linkedShipment, setLinkedShipment] = useState<(typeof SHIPMENTS)[0] | null>(null);
+
+  const [form, setForm] = useState<Form>(() => {
+    const shipmentId = searchParams.get('shipmentId');
+    const shipment = shipmentId ? SHIPMENTS.find(s => s.id === shipmentId) : null;
+    if (shipment) {
+      return {
+        requestDate: new Date().toISOString().split('T')[0],
+        status: 'new',
+        fromCity: shipment.fromCity,
+        fromIndex: shipment.fromIndex ?? '',
+        fromCountry: shipment.fromCountry,
+        toCity: shipment.toCity,
+        toIndex: shipment.toIndex ?? '',
+        toCountry: shipment.toCountry,
+        loadingDate: shipment.loadingDate,
+        weightKg: String(shipment.weightKg),
+        cargoValueUsd: shipment.cargoValueUsd ? String(shipment.cargoValueUsd) : '',
+        cargoType: shipment.cargoType,
+        vehicleCount: String(shipment.vehicleCount),
+        vehicleType: shipment.vehicleType,
+        loadingMethod: shipment.loadingMethod ?? 'rear',
+        hsCodes: shipment.hsCodes ?? [],
+        exportCustoms: shipment.exportCustoms ?? '',
+        importCustoms: shipment.importCustoms ?? '',
+        incoterms: shipment.incoterms ?? '',
+        currency: shipment.currency,
+        auctionDurationMin: '60',
+        specialConditions: shipment.specialConditions ?? '',
+        comment: shipment.comment ?? '',
+        selectedContractors: [],
+        channels: {},
+      };
+    }
+    return {
+      requestDate: new Date().toISOString().split('T')[0],
+      status: 'new',
+      fromCity: '', fromIndex: '', fromCountry: '',
+      toCity: '', toIndex: '', toCountry: '',
+      loadingDate: '', weightKg: '', cargoValueUsd: '',
+      cargoType: 'general',
+      vehicleCount: '1', vehicleType: 'truck', loadingMethod: 'rear',
+      hsCodes: [],
+      exportCustoms: '', importCustoms: '',
+      incoterms: '', currency: 'USD', auctionDurationMin: '60',
+      specialConditions: '', comment: '',
+      selectedContractors: [],
+      channels: {},
+    };
   });
+
+  useEffect(() => {
+    const shipmentId = searchParams.get('shipmentId');
+    if (shipmentId) {
+      const s = SHIPMENTS.find(x => x.id === shipmentId) ?? null;
+      setLinkedShipment(s);
+    }
+  }, [searchParams]);
 
   const [sending, setSending] = useState(false);
   const [sendResult, setSendResult] = useState<{ sent: number; failed: number } | null>(null);
 
   const set = <K extends keyof Form>(key: K, val: Form[K]) =>
     setForm(f => ({ ...f, [key]: val }));
+
+  // ---------- Auto-match ----------
+  const matched = useMemo(() => matchContractors({
+    fromCountry: form.fromCountry,
+    toCountry: form.toCountry,
+    vehicleType: form.vehicleType,
+  }, CONTRACTORS), [form.fromCountry, form.toCountry, form.vehicleType]);
+
+  const autoMatched = matched.filter(m => m.matchType === 'auto');
+  const partialMatched = matched.filter(m => m.matchType === 'partial');
+  const restContractors = matched.filter(m => m.matchType === 'manual');
+
+  // Auto-select all auto-matched when entering step 2
+  const handleGoStep2 = () => {
+    const autoIds = autoMatched.map(m => m.contractor.id);
+    const channels: Record<string, 'email' | 'telegram' | 'both'> = {};
+    autoIds.forEach(id => { channels[id] = 'telegram'; });
+    set('selectedContractors', autoIds);
+    set('channels', channels);
+    setStep(2);
+  };
 
   const toggleContractor = (id: string) => {
     const next = form.selectedContractors.includes(id)
@@ -100,29 +158,33 @@ export default function NewRateRequestPage() {
   };
 
   const toggleHsCode = (code: string) => {
-    const next = form.hsCodes.includes(code)
+    set('hsCodes', form.hsCodes.includes(code)
       ? form.hsCodes.filter(c => c !== code)
-      : [...form.hsCodes, code];
-    set('hsCodes', next);
+      : [...form.hsCodes, code]);
   };
 
   const canNext1 = form.fromCity && form.toCity && form.loadingDate && form.weightKg;
   const canNext2 = form.selectedContractors.length > 0;
 
-  const buildMessage = (contractorName: string) => {
+  const buildMessage = (contactName?: string) => {
+    const firstName = contactName?.split(' ')[0] ?? '';
     return [
-      `📦 *Запрос ставки — TransAsia Logistics*`,
+      `Добрый день${firstName ? `, ${firstName}` : ''}! 👋`,
       ``,
-      `🗺 Маршрут: *${form.fromCity}${form.fromCountry ? `, ${form.fromCountry}` : ''} → ${form.toCity}${form.toCountry ? `, ${form.toCountry}` : ''}*`,
+      `Как вы поживаете? Надеюсь, всё хорошо.`,
+      ``,
+      `У нас появился новый груз, и мы в первую очередь обращаемся к вам — хотели бы узнать вашу ставку, если есть такая возможность.`,
+      ``,
+      `📍 Маршрут: ${form.fromCity}${form.fromCountry ? ` (${form.fromCountry})` : ''} → ${form.toCity}${form.toCountry ? ` (${form.toCountry})` : ''}`,
       `📅 Дата погрузки: ${form.loadingDate}`,
       `⚖️ Вес: ${form.weightKg} кг`,
       form.cargoValueUsd ? `💰 Стоимость груза: ${form.cargoValueUsd} ${form.currency}` : '',
-      `🚛 Вид ТС: ${form.vehicleType}, кол-во: ${form.vehicleCount}`,
+      `🚛 Транспорт: ${form.vehicleType}, ${form.vehicleCount} шт.`,
       form.incoterms ? `📋 Инкотермс: ${form.incoterms}` : '',
       form.specialConditions ? `⚠️ Особые условия: ${form.specialConditions}` : '',
       form.comment ? `💬 ${form.comment}` : '',
       ``,
-      `Пожалуйста, отправьте вашу ставку в ответ на это сообщение.`,
+      `Если вам удобно — пожалуйста, скиньте вашу ставку в ответ. Будем очень признательны! 🙏`,
     ].filter(Boolean).join('\n');
   };
 
@@ -131,18 +193,15 @@ export default function NewRateRequestPage() {
     try {
       const selectedList = CONTRACTORS.filter(c => form.selectedContractors.includes(c.id));
       const recipients = selectedList.flatMap(c =>
-        c.contacts
-          .filter(ct => ct.telegram)
-          .map(ct => ({ username: ct.telegram!, message: buildMessage(c.name) }))
+        c.contacts.filter(ct => ct.telegram)
+          .map(ct => ({ username: ct.telegram!, message: buildMessage(ct.name) }))
       );
-
       if (recipients.length === 0) {
         alert('У выбранных подрядчиков нет Telegram контактов');
         setSending(false);
         return;
       }
-
-      const res = await fetch('http://localhost:3000/api/telegram/send-rate-request', {
+      const res = await fetch('http://165.245.217.29:3000/api/telegram/send-rate-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ recipients, delayMs: 5000 }),
@@ -173,8 +232,22 @@ export default function NewRateRequestPage() {
           <ChevronLeft size={14} /> Назад
         </button>
         <h1 className="text-2xl font-bold">Новый запрос ставки</h1>
-        <p className="text-muted-foreground text-sm mt-1">Заполните параметры отправления и выберите подрядчиков</p>
+        <p className="text-muted-foreground text-sm mt-1">Заполните параметры и система подберёт подрядчиков автоматически</p>
       </div>
+
+      {/* Linked shipment banner */}
+      {linkedShipment && (
+        <div className="flex items-center gap-3 mb-5 px-4 py-3 bg-primary/5 border border-primary/20 rounded-lg text-sm">
+          <Link2 size={15} className="text-primary shrink-0" />
+          <div className="flex-1 min-w-0">
+            <span className="font-medium text-primary">{linkedShipment.orderNumber}</span>
+            <span className="text-muted-foreground ml-2">
+              {linkedShipment.client} · {linkedShipment.fromCity} → {linkedShipment.toCity}
+            </span>
+          </div>
+          <span className="text-xs text-muted-foreground shrink-0">Данные заполнены из перевозки</span>
+        </div>
+      )}
 
       {/* Stepper */}
       <div className="flex items-center mb-8">
@@ -203,21 +276,20 @@ export default function NewRateRequestPage() {
         ))}
       </div>
 
-      {/* Step 1 — Cargo params */}
+      {/* ───── STEP 1 ───── */}
       {step === 1 && (
         <Card>
           <CardHeader className="pb-4">
             <CardTitle className="text-base">Основные параметры</CardTitle>
           </CardHeader>
           <CardContent className="space-y-5">
-            {/* Row: Дата запроса + Статус */}
             <div className="grid grid-cols-2 gap-4">
               <FormField label="Дата запроса">
                 <Input type="date" value={form.requestDate} onChange={e => set('requestDate', e.target.value)} />
               </FormField>
               <FormField label="Статус запроса">
-                <Select value={form.status} onValueChange={v => set('status', v)}>
-                  <SelectTrigger><SelectValue /></SelectTrigger>
+                <Select value={form.status} onValueChange={v => v && set('status', v)}>
+                  <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="new">Новый</SelectItem>
                     <SelectItem value="in_progress">В работе</SelectItem>
@@ -227,9 +299,8 @@ export default function NewRateRequestPage() {
               </FormField>
             </div>
 
-            {/* Divider */}
             <div className="border-t pt-4">
-              <p className="text-sm font-semibold text-foreground mb-3">Город отправления</p>
+              <p className="text-sm font-semibold mb-3">Город отправления</p>
               <div className="grid grid-cols-3 gap-4">
                 <FormField label="Город *">
                   <Input value={form.fromCity} onChange={e => set('fromCity', e.target.value)} placeholder="Ташкент" />
@@ -244,7 +315,7 @@ export default function NewRateRequestPage() {
             </div>
 
             <div className="border-t pt-4">
-              <p className="text-sm font-semibold text-foreground mb-3">Город назначения</p>
+              <p className="text-sm font-semibold mb-3">Город назначения</p>
               <div className="grid grid-cols-3 gap-4">
                 <FormField label="Город *">
                   <Input value={form.toCity} onChange={e => set('toCity', e.target.value)} placeholder="Москва" />
@@ -258,9 +329,8 @@ export default function NewRateRequestPage() {
               </div>
             </div>
 
-            {/* Дата погрузки / Вес / Стоимость */}
             <div className="border-t pt-4">
-              <p className="text-sm font-semibold text-foreground mb-3">Груз</p>
+              <p className="text-sm font-semibold mb-3">Груз</p>
               <div className="grid grid-cols-3 gap-4">
                 <FormField label="Дата погрузки *">
                   <Input type="date" value={form.loadingDate} onChange={e => set('loadingDate', e.target.value)} />
@@ -274,8 +344,8 @@ export default function NewRateRequestPage() {
               </div>
               <div className="mt-4">
                 <FormField label="Тип груза">
-                  <Select value={form.cargoType} onValueChange={v => set('cargoType', v)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                  <Select value={form.cargoType} onValueChange={v => v && set('cargoType', v)}>
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
                       <SelectItem value="general">Генеральный</SelectItem>
                       <SelectItem value="bulk">Насыпной</SelectItem>
@@ -289,35 +359,36 @@ export default function NewRateRequestPage() {
               </div>
             </div>
 
-            {/* ТС */}
             <div className="border-t pt-4">
-              <p className="text-sm font-semibold text-foreground mb-3">Транспортное средство</p>
+              <p className="text-sm font-semibold mb-3">Транспортное средство</p>
               <div className="grid grid-cols-3 gap-4">
                 <FormField label="Кол-во ТС">
-                  <Input type="number" min={1} value={form.vehicleCount} onChange={e => set('vehicleCount', e.target.value)} placeholder="1" />
+                  <Input type="number" min={1} value={form.vehicleCount} onChange={e => set('vehicleCount', e.target.value)} />
                 </FormField>
                 <FormField label="Вид ТС">
-                  <Select value={form.vehicleType} onValueChange={v => set('vehicleType', v)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                  <Select value={form.vehicleType} onValueChange={v => v && set('vehicleType', v)}>
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="truck">Фура (20т)</SelectItem>
-                      <SelectItem value="truck_mega">Мега-фура (24т)</SelectItem>
-                      <SelectItem value="isothermal">Изотермический</SelectItem>
-                      <SelectItem value="ref">Рефрижератор</SelectItem>
-                      <SelectItem value="open">Открытый бортовой</SelectItem>
-                      <SelectItem value="tanker">Цистерна</SelectItem>
-                      <SelectItem value="container_20">Контейнер 20'</SelectItem>
-                      <SelectItem value="container_40">Контейнер 40'</SelectItem>
+                      <SelectItem value="truck">Фура (20т) — Авто</SelectItem>
+                      <SelectItem value="truck_mega">Мега-фура (24т) — Авто</SelectItem>
+                      <SelectItem value="isothermal">Изотермический — Авто</SelectItem>
+                      <SelectItem value="ref">Рефрижератор — Авто</SelectItem>
+                      <SelectItem value="open">Открытый бортовой — Авто</SelectItem>
+                      <SelectItem value="tanker">Цистерна — Авто</SelectItem>
+                      <SelectItem value="container_20">Контейнер 20' — Море</SelectItem>
+                      <SelectItem value="container_40">Контейнер 40' — Море</SelectItem>
+                      <SelectItem value="air">Авиагрузовой</SelectItem>
+                      <SelectItem value="rail_wagon">Ж/Д вагон</SelectItem>
                     </SelectContent>
                   </Select>
                 </FormField>
                 <FormField label="Способ погрузки">
-                  <Select value={form.loadingMethod} onValueChange={v => set('loadingMethod', v)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                  <Select value={form.loadingMethod} onValueChange={v => v && set('loadingMethod', v)}>
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="rear">Задняя погрузка</SelectItem>
-                      <SelectItem value="side">Боковая погрузка</SelectItem>
-                      <SelectItem value="top">Верхняя погрузка</SelectItem>
+                      <SelectItem value="rear">Задняя</SelectItem>
+                      <SelectItem value="side">Боковая</SelectItem>
+                      <SelectItem value="top">Верхняя</SelectItem>
                       <SelectItem value="any">Любой</SelectItem>
                     </SelectContent>
                   </Select>
@@ -325,27 +396,24 @@ export default function NewRateRequestPage() {
               </div>
             </div>
 
-            {/* Таможня */}
             <div className="border-t pt-4">
-              <p className="text-sm font-semibold text-foreground mb-3">Таможня и ВЭД</p>
+              <p className="text-sm font-semibold mb-3">Таможня и ВЭД</p>
               <div className="mb-4">
-                <Label className="mb-2 block">Код ТНВЭД</Label>
+                <Label className="mb-2 block text-xs text-muted-foreground">Код ТНВЭД</Label>
                 <div className="flex flex-wrap gap-2 mb-2">
                   {form.hsCodes.map(c => (
-                    <Badge key={c} variant="secondary" className="gap-1 pr-1">
+                    <Badge key={c} variant="secondary" className="gap-1">
                       {c.split(' - ')[0]}
-                      <button onClick={() => toggleHsCode(c)} className="hover:text-destructive">
-                        <X size={12} />
+                      <button onClick={() => toggleHsCode(c)} className="hover:text-destructive ml-1">
+                        <X size={11} />
                       </button>
                     </Badge>
                   ))}
                 </div>
-                <Select onValueChange={v => { if (!form.hsCodes.includes(v)) toggleHsCode(v); }}>
-                  <SelectTrigger><SelectValue placeholder="Выберите код ТНВЭД..." /></SelectTrigger>
+                <Select onValueChange={(v: unknown) => { const s = v as string; if (s && !form.hsCodes.includes(s)) toggleHsCode(s); }}>
+                  <SelectTrigger className="w-full"><SelectValue placeholder="Выберите код ТНВЭД..." /></SelectTrigger>
                   <SelectContent>
-                    {HS_CODES.map(c => (
-                      <SelectItem key={c} value={c}>{c}</SelectItem>
-                    ))}
+                    {HS_CODES.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                   </SelectContent>
                 </Select>
               </div>
@@ -359,29 +427,25 @@ export default function NewRateRequestPage() {
               </div>
             </div>
 
-            {/* Условия */}
             <div className="border-t pt-4">
-              <p className="text-sm font-semibold text-foreground mb-3">Условия</p>
+              <p className="text-sm font-semibold mb-3">Условия</p>
               <div className="grid grid-cols-3 gap-4 mb-4">
                 <FormField label="Валюта">
-                  <Select value={form.currency} onValueChange={v => set('currency', v)}>
-                    <SelectTrigger><SelectValue /></SelectTrigger>
+                  <Select value={form.currency} onValueChange={v => v && set('currency', v)}>
+                    <SelectTrigger className="w-full"><SelectValue /></SelectTrigger>
                     <SelectContent>
-                      <SelectItem value="USD">USD</SelectItem>
-                      <SelectItem value="EUR">EUR</SelectItem>
-                      <SelectItem value="RUB">RUB</SelectItem>
-                      <SelectItem value="UZS">UZS</SelectItem>
+                      {['USD', 'EUR', 'RUB', 'UZS'].map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
                     </SelectContent>
                   </Select>
                 </FormField>
                 <FormField label="Длительность аукциона (мин)">
-                  <Input type="number" min={1} value={form.auctionDurationMin} onChange={e => set('auctionDurationMin', e.target.value)} placeholder="60" />
+                  <Input type="number" min={1} value={form.auctionDurationMin} onChange={e => set('auctionDurationMin', e.target.value)} />
                 </FormField>
                 <FormField label="Инкотермс">
-                  <Select value={form.incoterms} onValueChange={v => set('incoterms', v)}>
-                    <SelectTrigger><SelectValue placeholder="Выберите..." /></SelectTrigger>
+                  <Select value={form.incoterms} onValueChange={v => v && set('incoterms', v)}>
+                    <SelectTrigger className="w-full"><SelectValue placeholder="Выберите..." /></SelectTrigger>
                     <SelectContent>
-                      {['EXW', 'FCA', 'FAS', 'FOB', 'CFR', 'CIF', 'CPT', 'CIP', 'DAP', 'DPU', 'DDP'].map(t => (
+                      {['EXW','FCA','FAS','FOB','CFR','CIF','CPT','CIP','DAP','DPU','DDP'].map(t => (
                         <SelectItem key={t} value={t}>{t}</SelectItem>
                       ))}
                     </SelectContent>
@@ -390,20 +454,10 @@ export default function NewRateRequestPage() {
               </div>
               <div className="grid grid-cols-2 gap-4">
                 <FormField label="Особые условия">
-                  <Textarea
-                    value={form.specialConditions}
-                    onChange={e => set('specialConditions', e.target.value)}
-                    placeholder="Температурный режим, страховка, etc."
-                    className="min-h-[80px]"
-                  />
+                  <Textarea value={form.specialConditions} onChange={e => set('specialConditions', e.target.value)} placeholder="Температурный режим, страховка..." className="min-h-[80px]" />
                 </FormField>
                 <FormField label="Комментарий">
-                  <Textarea
-                    value={form.comment}
-                    onChange={e => set('comment', e.target.value)}
-                    placeholder="Дополнительная информация..."
-                    className="min-h-[80px]"
-                  />
+                  <Textarea value={form.comment} onChange={e => set('comment', e.target.value)} placeholder="Дополнительная информация..." className="min-h-[80px]" />
                 </FormField>
               </div>
             </div>
@@ -411,89 +465,114 @@ export default function NewRateRequestPage() {
         </Card>
       )}
 
-      {/* Step 2 — Contractors */}
+      {/* ───── STEP 2 ───── */}
       {step === 2 && (
-        <Card>
-          <CardHeader className="pb-4">
-            <CardTitle className="text-base">Выбор подрядчиков</CardTitle>
-            <p className="text-sm text-muted-foreground">Выберите подрядчиков и канал отправки запроса</p>
-          </CardHeader>
-          <CardContent>
-            <div className="rounded-lg border overflow-hidden">
-              <table className="w-full text-sm">
-                <thead className="bg-muted/50">
-                  <tr>
-                    <th className="w-10 p-3 text-left"></th>
-                    <th className="p-3 text-left font-medium text-muted-foreground">Компания</th>
-                    <th className="p-3 text-left font-medium text-muted-foreground">Страна</th>
-                    <th className="p-3 text-left font-medium text-muted-foreground">Транспорт</th>
-                    <th className="p-3 text-left font-medium text-muted-foreground">Канал</th>
-                  </tr>
-                </thead>
-                <tbody>
-                  {CONTRACTORS.map(c => {
-                    const checked = form.selectedContractors.includes(c.id);
-                    return (
-                      <tr
-                        key={c.id}
-                        className={cn(
-                          'border-t cursor-pointer transition-colors',
-                          checked ? 'bg-primary/5' : 'hover:bg-muted/30'
-                        )}
-                        onClick={() => toggleContractor(c.id)}
-                      >
-                        <td className="p-3 text-center">
-                          <div className={cn(
-                            'w-4 h-4 rounded border-2 mx-auto flex items-center justify-center',
-                            checked ? 'border-primary bg-primary' : 'border-muted-foreground'
-                          )}>
-                            {checked && <Check size={10} className="text-white" />}
-                          </div>
-                        </td>
-                        <td className="p-3 font-medium">{c.name}</td>
-                        <td className="p-3 text-muted-foreground">{c.country}</td>
-                        <td className="p-3">
-                          <div className="flex flex-wrap gap-1">
-                            {c.transportTypes.map(t => (
-                              <Badge key={t} variant="secondary" className="text-xs py-0">
-                                {TRANSPORT_LABELS[t]}
-                              </Badge>
-                            ))}
-                          </div>
-                        </td>
-                        <td className="p-3" onClick={e => e.stopPropagation()}>
-                          {checked && (
-                            <Select
-                              value={form.channels[c.id] || 'telegram'}
-                              onValueChange={v => set('channels', { ...form.channels, [c.id]: v as any })}
-                            >
-                              <SelectTrigger className="h-7 text-xs w-32">
-                                <SelectValue />
-                              </SelectTrigger>
-                              <SelectContent>
-                                <SelectItem value="telegram">Telegram</SelectItem>
-                                <SelectItem value="email">Email</SelectItem>
-                                <SelectItem value="both">Оба</SelectItem>
-                              </SelectContent>
-                            </Select>
-                          )}
-                        </td>
-                      </tr>
-                    );
-                  })}
-                </tbody>
-              </table>
-            </div>
-            {form.selectedContractors.length > 0 && (
-              <div className="mt-3 px-4 py-2.5 bg-primary/10 rounded-lg text-sm text-primary font-medium">
-                Выбрано подрядчиков: {form.selectedContractors.length}
+        <div className="space-y-4">
+          {/* Auto-matched */}
+          <Card>
+            <CardHeader className="pb-3">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles size={16} className="text-primary" />
+                  <CardTitle className="text-base">Автоподбор</CardTitle>
+                  {autoMatched.length > 0 && (
+                    <Badge variant="secondary">{autoMatched.length} подрядчик{autoMatched.length > 1 ? 'а' : ''}</Badge>
+                  )}
+                </div>
+                <span className="text-xs text-muted-foreground">
+                  {form.fromCountry || form.fromCity} → {form.toCountry || form.toCity} · {vehicleToTransportType(form.vehicleType) === 'auto' ? 'Авто' : vehicleToTransportType(form.vehicleType) === 'rail' ? 'Ж/Д' : vehicleToTransportType(form.vehicleType) === 'air' ? 'Авиа' : 'Море'}
+                </span>
               </div>
+              <p className="text-xs text-muted-foreground mt-1">
+                Система выбрала подрядчиков по маршруту и типу перевозки. Вы можете снять или добавить.
+              </p>
+            </CardHeader>
+            <CardContent>
+              {autoMatched.length === 0 ? (
+                <div className="py-6 text-center text-sm text-muted-foreground">
+                  Не найдено подрядчиков для этого маршрута и вида ТС.
+                  <br />Укажите страны отправления и назначения для автоподбора.
+                </div>
+              ) : (
+                <ContractorTable
+                  items={autoMatched}
+                  selected={form.selectedContractors}
+                  channels={form.channels}
+                  onToggle={toggleContractor}
+                  onChannelChange={(id, v) => set('channels', { ...form.channels, [id]: v })}
+                  showReasons
+                />
+              )}
+
+              {/* Partial matches */}
+              {partialMatched.length > 0 && (
+                <div className="mt-4 pt-4 border-t">
+                  <p className="text-xs font-medium text-muted-foreground mb-2">Частичное совпадение</p>
+                  <ContractorTable
+                    items={partialMatched}
+                    selected={form.selectedContractors}
+                    channels={form.channels}
+                    onToggle={toggleContractor}
+                    onChannelChange={(id, v) => set('channels', { ...form.channels, [id]: v })}
+                    showReasons
+                    dimmed
+                  />
+                </div>
+              )}
+            </CardContent>
+          </Card>
+
+          {/* Manual selection */}
+          <Card>
+            <button
+              className="w-full"
+              onClick={() => setShowManual(v => !v)}
+            >
+              <CardHeader className="pb-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <UserCheck size={16} className="text-muted-foreground" />
+                    <CardTitle className="text-sm font-medium text-muted-foreground">Выбрать вручную</CardTitle>
+                    {restContractors.length > 0 && (
+                      <Badge variant="outline" className="text-xs">{restContractors.length} других</Badge>
+                    )}
+                  </div>
+                  {showManual ? <ChevronUp size={16} className="text-muted-foreground" /> : <ChevronDown size={16} className="text-muted-foreground" />}
+                </div>
+              </CardHeader>
+            </button>
+            {showManual && (
+              <CardContent className="pt-0">
+                <ContractorTable
+                  items={restContractors}
+                  selected={form.selectedContractors}
+                  channels={form.channels}
+                  onToggle={toggleContractor}
+                  onChannelChange={(id, v) => set('channels', { ...form.channels, [id]: v })}
+                />
+              </CardContent>
             )}
-          </CardContent>
-        </Card>
+          </Card>
+
+          {/* Summary bar */}
+          {form.selectedContractors.length > 0 && (
+            <div className="flex items-center justify-between px-4 py-3 bg-primary/5 border border-primary/20 rounded-lg text-sm">
+              <div className="flex items-center gap-2 text-primary font-medium">
+                <Check size={14} />
+                Выбрано: {form.selectedContractors.length} подрядчик{form.selectedContractors.length > 1 ? 'а' : ''}
+              </div>
+              <button
+                onClick={() => { set('selectedContractors', []); set('channels', {}); }}
+                className="text-xs text-muted-foreground hover:text-foreground"
+              >
+                Снять всё
+              </button>
+            </div>
+          )}
+        </div>
       )}
 
-      {/* Step 3 — Confirm */}
+      {/* ───── STEP 3 ───── */}
       {step === 3 && (
         <div className="space-y-4">
           <Card>
@@ -501,38 +580,27 @@ export default function NewRateRequestPage() {
               <CardTitle className="text-base">Параметры отправления</CardTitle>
             </CardHeader>
             <CardContent>
-              <div className="grid grid-cols-2 gap-x-8 gap-y-2 text-sm">
+              <div className="grid grid-cols-2 gap-x-8 gap-y-1 text-sm">
                 <SummaryRow label="Дата запроса" value={form.requestDate} />
                 <SummaryRow label="Статус" value={{ new: 'Новый', in_progress: 'В работе', completed: 'Завершён' }[form.status] || form.status} />
                 <SummaryRow label="Отправление" value={[form.fromCity, form.fromIndex, form.fromCountry].filter(Boolean).join(', ')} />
                 <SummaryRow label="Назначение" value={[form.toCity, form.toIndex, form.toCountry].filter(Boolean).join(', ')} />
                 <SummaryRow label="Дата погрузки" value={form.loadingDate} />
                 <SummaryRow label="Вес (кг)" value={form.weightKg} />
-                {form.cargoValueUsd && <SummaryRow label="Стоимость груза" value={`${form.cargoValueUsd} ${form.currency}`} />}
-                <SummaryRow label="Тип груза" value={form.cargoType} />
-                <SummaryRow label="Кол-во ТС / Вид" value={`${form.vehicleCount} × ${form.vehicleType}`} />
-                <SummaryRow label="Способ погрузки" value={form.loadingMethod} />
+                {form.cargoValueUsd && <SummaryRow label="Стоимость" value={`${form.cargoValueUsd} ${form.currency}`} />}
+                <SummaryRow label="Вид ТС" value={`${form.vehicleCount} × ${form.vehicleType}`} />
                 {form.incoterms && <SummaryRow label="Инкотермс" value={form.incoterms} />}
-                {form.auctionDurationMin && <SummaryRow label="Длительность аукциона" value={`${form.auctionDurationMin} мин`} />}
-                {form.exportCustoms && <SummaryRow label="Экспорт. ТО" value={form.exportCustoms} />}
-                {form.importCustoms && <SummaryRow label="Импорт. ТО" value={form.importCustoms} />}
+                {form.auctionDurationMin && <SummaryRow label="Аукцион" value={`${form.auctionDurationMin} мин`} />}
               </div>
               {form.hsCodes.length > 0 && (
-                <div className="mt-3 pt-3 border-t">
-                  <span className="text-xs text-muted-foreground">Коды ТНВЭД: </span>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {form.hsCodes.map(c => <Badge key={c} variant="outline" className="text-xs">{c.split(' - ')[0]}</Badge>)}
-                  </div>
+                <div className="mt-3 pt-3 border-t flex flex-wrap gap-1">
+                  {form.hsCodes.map(c => <Badge key={c} variant="outline" className="text-xs">{c.split(' - ')[0]}</Badge>)}
                 </div>
               )}
-              {form.specialConditions && (
-                <div className="mt-3 pt-3 border-t text-sm">
-                  <span className="text-muted-foreground">Особые условия: </span>{form.specialConditions}
-                </div>
-              )}
-              {form.comment && (
-                <div className="mt-2 text-sm">
-                  <span className="text-muted-foreground">Комментарий: </span>{form.comment}
+              {(form.specialConditions || form.comment) && (
+                <div className="mt-3 pt-3 border-t text-sm space-y-1">
+                  {form.specialConditions && <p><span className="text-muted-foreground">Особые условия: </span>{form.specialConditions}</p>}
+                  {form.comment && <p><span className="text-muted-foreground">Комментарий: </span>{form.comment}</p>}
                 </div>
               )}
             </CardContent>
@@ -540,56 +608,170 @@ export default function NewRateRequestPage() {
 
           <Card>
             <CardHeader className="pb-3">
-              <CardTitle className="text-base">Получатели ({form.selectedContractors.length})</CardTitle>
+              <CardTitle className="text-base">
+                Получатели — {form.selectedContractors.length} подрядчик{form.selectedContractors.length > 1 ? 'а' : ''}
+              </CardTitle>
             </CardHeader>
             <CardContent className="space-y-2">
-              {CONTRACTORS.filter(c => form.selectedContractors.includes(c.id)).map(c => (
-                <div key={c.id} className="flex items-center justify-between py-2 border-b last:border-0">
-                  <div>
-                    <p className="text-sm font-medium">{c.name}</p>
-                    <p className="text-xs text-muted-foreground">{c.country}</p>
+              {CONTRACTORS.filter(c => form.selectedContractors.includes(c.id)).map(c => {
+                const m = matched.find(x => x.contractor.id === c.id);
+                return (
+                  <div key={c.id} className="flex items-center justify-between py-2 border-b last:border-0">
+                    <div>
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium">{c.name}</p>
+                        {m?.matchType === 'auto' && (
+                          <Badge variant="secondary" className="text-xs gap-1 py-0">
+                            <Sparkles size={9} /> авто
+                          </Badge>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground">{c.country}</p>
+                    </div>
+                    <Badge variant="outline" className="text-xs">
+                      {form.channels[c.id] === 'both' ? 'Email + Telegram' :
+                       form.channels[c.id] === 'email' ? 'Email' : 'Telegram'}
+                    </Badge>
                   </div>
-                  <Badge variant="secondary" className="text-xs">
-                    {form.channels[c.id] === 'both' ? 'Email + Telegram' :
-                     form.channels[c.id] === 'email' ? 'Email' : 'Telegram'}
-                  </Badge>
-                </div>
-              ))}
+                );
+              })}
             </CardContent>
           </Card>
         </div>
       )}
 
-      {/* Footer actions */}
+      {/* Footer */}
       <div className="flex items-center justify-between mt-6">
-        <Button
-          variant="outline"
-          onClick={() => step > 1 ? setStep((step - 1) as Step) : navigate(-1)}
-        >
+        <Button variant="outline" onClick={() => step > 1 ? setStep((step - 1) as Step) : navigate(-1)}>
           <ChevronLeft size={15} /> Назад
         </Button>
 
-        {step < 3 ? (
-          <Button
-            onClick={() => setStep((step + 1) as Step)}
-            disabled={step === 1 ? !canNext1 : !canNext2}
-          >
+        {step === 1 && (
+          <Button onClick={handleGoStep2} disabled={!canNext1}>
             Далее <ChevronRight size={15} />
           </Button>
-        ) : sendResult ? (
-          <div className="flex items-center gap-3">
-            <span className="text-sm text-green-600 font-semibold">✓ Отправлено: {sendResult.sent}</span>
-            {sendResult.failed > 0 && (
-              <span className="text-sm text-destructive">✗ Ошибок: {sendResult.failed}</span>
-            )}
-            <Button onClick={() => navigate('/rate-requests')}>Готово</Button>
-          </div>
-        ) : (
-          <Button onClick={handleSend} disabled={sending}>
-            <Send size={15} /> {sending ? 'Отправляем...' : 'Отправить запросы'}
+        )}
+        {step === 2 && (
+          <Button onClick={() => setStep(3)} disabled={!canNext2}>
+            Далее <ChevronRight size={15} />
           </Button>
         )}
+        {step === 3 && !sendResult && (
+          <Button onClick={handleSend} disabled={sending}>
+            <Send size={15} /> {sending ? 'Отправляем...' : `Отправить ${form.selectedContractors.length} запрос${form.selectedContractors.length > 1 ? 'а' : ''}`}
+          </Button>
+        )}
+        {step === 3 && sendResult && (
+          <div className="flex items-center gap-3">
+            <span className="text-sm text-green-600 font-semibold">✓ Отправлено: {sendResult.sent}</span>
+            {sendResult.failed > 0 && <span className="text-sm text-destructive">✗ Ошибок: {sendResult.failed}</span>}
+            <Button onClick={() => navigate('/rate-requests')}>Готово</Button>
+          </div>
+        )}
       </div>
+    </div>
+  );
+}
+
+// ─── Sub-components ───────────────────────────────────────────────────────────
+
+interface ContractorTableProps {
+  items: ReturnType<typeof matchContractors>;
+  selected: string[];
+  channels: Record<string, 'email' | 'telegram' | 'both'>;
+  onToggle: (id: string) => void;
+  onChannelChange: (id: string, v: 'email' | 'telegram' | 'both') => void;
+  showReasons?: boolean;
+  dimmed?: boolean;
+}
+
+function ContractorTable({ items, selected, channels, onToggle, onChannelChange, showReasons, dimmed }: ContractorTableProps) {
+  if (items.length === 0) return null;
+  return (
+    <div className="rounded-lg border overflow-hidden">
+      <table className="w-full text-sm">
+        <thead className="bg-muted/40">
+          <tr>
+            <th className="w-10 p-2.5 text-left"></th>
+            <th className="p-2.5 text-left font-medium text-muted-foreground">Компания</th>
+            <th className="p-2.5 text-left font-medium text-muted-foreground hidden md:table-cell">Рейтинг</th>
+            <th className="p-2.5 text-left font-medium text-muted-foreground hidden md:table-cell">Транспорт</th>
+            {showReasons && <th className="p-2.5 text-left font-medium text-muted-foreground hidden lg:table-cell">Почему подобран</th>}
+            <th className="p-2.5 text-left font-medium text-muted-foreground">Канал</th>
+          </tr>
+        </thead>
+        <tbody>
+          {items.map(({ contractor: c, reasons, score }) => {
+            const checked = selected.includes(c.id);
+            return (
+              <tr
+                key={c.id}
+                className={cn(
+                  'border-t cursor-pointer transition-colors',
+                  checked ? 'bg-primary/5' : dimmed ? 'opacity-60 hover:opacity-100 hover:bg-muted/20' : 'hover:bg-muted/20'
+                )}
+                onClick={() => onToggle(c.id)}
+              >
+                <td className="p-2.5 text-center">
+                  <div className={cn(
+                    'w-4 h-4 rounded border-2 mx-auto flex items-center justify-center',
+                    checked ? 'border-primary bg-primary' : 'border-muted-foreground/40'
+                  )}>
+                    {checked && <Check size={10} className="text-white" />}
+                  </div>
+                </td>
+                <td className="p-2.5">
+                  <p className="font-medium">{c.name}</p>
+                  <p className="text-xs text-muted-foreground">{c.country} · {c.totalRates} перевозок</p>
+                </td>
+                <td className="p-2.5 hidden md:table-cell">
+                  <div className="flex items-center gap-1 text-amber-500">
+                    <Star size={12} className="fill-amber-400" />
+                    <span className="text-xs font-medium text-foreground">{c.rating}</span>
+                  </div>
+                </td>
+                <td className="p-2.5 hidden md:table-cell">
+                  <div className="flex flex-wrap gap-1">
+                    {c.transportTypes.map(t => (
+                      <Badge key={t} variant="secondary" className="text-xs py-0">
+                        {TRANSPORT_LABELS[t]}
+                      </Badge>
+                    ))}
+                  </div>
+                </td>
+                {showReasons && (
+                  <td className="p-2.5 hidden lg:table-cell">
+                    <div className="flex flex-wrap gap-1">
+                      {reasons.map(r => (
+                        <span key={r} className="text-xs text-primary bg-primary/10 px-1.5 py-0.5 rounded">{r}</span>
+                      ))}
+                    </div>
+                  </td>
+                )}
+                <td className="p-2.5" onClick={e => e.stopPropagation()}>
+                  {checked ? (
+                    <Select
+                      value={channels[c.id] || 'telegram'}
+                      onValueChange={v => v && onChannelChange(c.id, v as 'email' | 'telegram' | 'both')}
+                    >
+                      <SelectTrigger className="h-7 text-xs w-32">
+                        <SelectValue />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="telegram">Telegram</SelectItem>
+                        <SelectItem value="email">Email</SelectItem>
+                        <SelectItem value="both">Оба</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <span className="text-xs text-muted-foreground">—</span>
+                  )}
+                </td>
+              </tr>
+            );
+          })}
+        </tbody>
+      </table>
     </div>
   );
 }

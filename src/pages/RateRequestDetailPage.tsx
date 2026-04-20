@@ -1,7 +1,29 @@
 import { useParams, useNavigate } from 'react-router-dom';
-import { useState } from 'react';
-import { MapPin, Calendar, Package, Trophy, Clock, CheckCircle2, XCircle, Copy } from 'lucide-react';
+import { useState, useEffect, useRef } from 'react';
+import { ChevronLeft, Trophy, Copy, CheckCircle2, Send, Loader2, Bell } from 'lucide-react';
 import { RATE_REQUESTS, TRANSPORT_LABELS, CONTRACTORS, RateResponse } from '../data/mock';
+import { Button } from '@/components/ui/button';
+import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
+import { cn } from '@/lib/utils';
+
+const STATUS_COLORS: Record<string, string> = {
+  open: 'bg-blue-50 text-blue-700 border-blue-200',
+  closed: 'bg-slate-100 text-slate-600 border-slate-200',
+};
+
+const RESP_STATUS_COLORS: Record<RateResponse['status'], string> = {
+  responded: 'bg-green-50 text-green-700 border-green-200',
+  pending: 'bg-amber-50 text-amber-700 border-amber-200',
+  declined: 'bg-red-50 text-red-700 border-red-200',
+  winner: 'bg-purple-50 text-purple-700 border-purple-200',
+};
+
+const RESP_STATUS_LABELS: Record<RateResponse['status'], string> = {
+  responded: 'Ответил',
+  pending: 'Ожидает',
+  declined: 'Отказался',
+  winner: 'Победитель',
+};
 
 export default function RateRequestDetailPage() {
   const { id } = useParams();
@@ -9,12 +31,43 @@ export default function RateRequestDetailPage() {
   const rr = RATE_REQUESTS.find(r => r.id === id);
   const [winnerId, setWinnerId] = useState(rr?.winnerId || '');
   const [copied, setCopied] = useState(false);
+  const [tgSending, setTgSending] = useState(false);
+  const [tgResult, setTgResult] = useState<{ sent: number; failed: number } | null>(null);
+  const baseResponses = rr?.responses ?? [];
+  const [extraResponses, setExtraResponses] = useState<typeof baseResponses>([]);
+  const responses = [...baseResponses, ...extraResponses];
+  const seenIds = useRef<Set<string>>(new Set(baseResponses.map(r => r.id)));
+  const [newIds, setNewIds] = useState<Set<string>>(new Set());
 
-  if (!rr) return <div>Запрос не найден</div>;
+  useEffect(() => {
+    const check = async () => {
+      try {
+        const res = await fetch(`http://165.245.217.29:3000/api/telegram/responses/${rr?.token}`);
+        const data: typeof baseResponses = await res.json();
+        setExtraResponses(data);
+        const fresh = data.filter(r => !seenIds.current.has(r.id));
+        if (fresh.length > 0) {
+          fresh.forEach(r => seenIds.current.add(r.id));
+          setNewIds(prev => new Set([...prev, ...fresh.map(r => r.id)]));
+        }
+      } catch {}
+    };
+    check();
+    const interval = setInterval(check, 4000);
+    return () => clearInterval(interval);
+  }, [id]);
 
-  const contractors = CONTRACTORS.filter(c => rr.invitedContractors.includes(c.id));
+  if (!rr) {
+    return (
+      <div className="text-center py-24 text-muted-foreground text-sm">
+        Запрос не найден
+        <br />
+        <Button variant="link" onClick={() => navigate('/rate-requests')}>← Назад к списку</Button>
+      </div>
+    );
+  }
+
   const publicLink = `${window.location.origin}/rate/${rr.token}`;
-
   const copyLink = () => {
     navigator.clipboard.writeText(publicLink);
     setCopied(true);
@@ -23,177 +76,318 @@ export default function RateRequestDetailPage() {
 
   const selectWinner = (respId: string) => {
     setWinnerId(respId);
-    alert(`Победитель выбран: ${rr.responses.find(r => r.id === respId)?.contractorName} (mock)`);
   };
 
-  const statusBadge = (s: RateResponse['status']) => {
-    const map = {
-      responded: { label: 'Ответил', color: '#10b981', bg: '#ecfdf5' },
-      pending: { label: 'Ожидает', color: '#f59e0b', bg: '#fffbeb' },
-      declined: { label: 'Отказался', color: '#ef4444', bg: '#fef2f2' },
-      winner: { label: 'Победитель', color: '#7c3aed', bg: '#f5f3ff' },
-    };
-    const { label, color, bg } = map[s] || map.pending;
-    return <span style={{ padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600, background: bg, color }}>{label}</span>;
+  const sendViaTelegram = async () => {
+    const recipients = invitedContractors
+      .flatMap(c => c.contacts.filter(ct => ct.telegram).map(ct => ({
+        username: ct.telegram!,
+        message: `Добрый день, ${ct.name.split(' ')[0]}! 👋\n\nКак вы поживаете? Надеюсь, всё хорошо.\n\nХотели бы обратиться к вам с небольшой просьбой — у нас появился груз, и мы в первую очередь думаем о вас. Не могли бы вы подсказать вашу ставку?\n\n📍 Маршрут: ${rr.from} → ${rr.to}\n🚛 Транспорт: ${TRANSPORT_LABELS[rr.transportType]}\n📅 Дата погрузки: ${rr.loadingDate}\n⚖️ Вес: ${rr.weight.toLocaleString()} кг${rr.volume ? `, ${rr.volume} м³` : ''}${rr.comment ? `\n\n💬 ${rr.comment}` : ''}\n\nЕсли вам удобно — можете оставить ставку здесь: ${window.location.origin}/rate/${rr.token}\n\nБудем ждать до ${rr.deadline}. Заранее большое спасибо! 🙏`,
+      })));
+
+    if (recipients.length === 0) {
+      alert('У приглашённых подрядчиков нет Telegram-контактов');
+      return;
+    }
+
+    setTgSending(true);
+    setTgResult(null);
+    try {
+      const res = await fetch('http://165.245.217.29:3000/api/telegram/send-rate-request', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ recipients }),
+      });
+      const data = await res.json();
+      setTgResult({ sent: data.sent, failed: data.failed });
+    } catch {
+      setTgResult({ sent: 0, failed: recipients.length });
+    } finally {
+      setTgSending(false);
+    }
   };
+
+  // Build full contractor rows: invited but not responded = pending row
+  const invitedContractors = CONTRACTORS.filter(c => rr.invitedContractors.includes(c.id));
+  const tableRows = invitedContractors.map(c => {
+    const resp = responses.find(r => r.contractorId === c.id);
+    return { contractor: c, resp };
+  });
+  // Rows from unknown contractors (submitted via public link without contractor ID)
+  const unknownRows = responses.filter(r => !rr.invitedContractors.includes(r.contractorId));
+
+  const fields: { label: string; value: React.ReactNode }[] = [
+    { label: 'Дата запроса', value: rr.createdAt },
+    { label: 'Город отправления', value: rr.from },
+    { label: 'Город назначения', value: rr.to },
+    { label: 'Дата погрузки', value: rr.loadingDate },
+    { label: 'Вид транспорта', value: TRANSPORT_LABELS[rr.transportType] },
+    { label: 'Дедлайн ответа', value: rr.deadline },
+    { label: 'Вес груза', value: `${rr.weight.toLocaleString()} кг` },
+    { label: 'Объём', value: `${rr.volume} м³` },
+    { label: 'Статус запроса', value: (
+      <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border', STATUS_COLORS[rr.status])}>
+        {rr.status === 'open' ? 'Открыт' : 'Закрыт'}
+      </span>
+    )},
+    { label: 'Победитель', value: winnerId
+        ? (rr.responses.find(r => r.id === winnerId)?.contractorName ?? '—')
+        : '—'
+    },
+    { label: 'Приглашено подрядчиков', value: rr.invitedContractors.length },
+    { label: 'Получено ответов', value: rr.responses.length },
+    { label: 'Комментарий', value: rr.comment || '—' },
+    { label: 'Публичная ссылка', value: (
+      <button
+        onClick={copyLink}
+        className="flex items-center gap-1.5 text-xs text-blue-600 hover:text-blue-800 underline underline-offset-2"
+      >
+        {copied ? <CheckCircle2 size={12} className="text-green-600" /> : <Copy size={12} />}
+        {copied ? 'Скопировано' : 'Скопировать ссылку'}
+      </button>
+    )},
+  ];
 
   return (
-    <div style={{ maxWidth: 860, margin: '0 auto' }}>
-      <button onClick={() => navigate(-1)} style={btnGhost}>← Назад</button>
+    <div className="max-w-5xl mx-auto pb-10">
+      {/* Back */}
+      <button
+        onClick={() => navigate('/rate-requests')}
+        className="text-sm text-muted-foreground hover:text-foreground flex items-center gap-1 mb-4"
+      >
+        <ChevronLeft size={14} /> Запросы ставок
+      </button>
 
       {/* Header */}
-      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', margin: '12px 0 24px' }}>
+      <div className="flex items-start justify-between gap-4 mb-6">
         <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 6 }}>
-            <MapPin size={18} color="#3b82f6" />
-            <h1 style={{ margin: 0, fontSize: 22, fontWeight: 700 }}>{rr.from} → {rr.to}</h1>
-            <span style={{ padding: '3px 10px', borderRadius: 12, fontSize: 12, fontWeight: 600, background: '#eff6ff', color: '#3b82f6' }}>
-              {TRANSPORT_LABELS[rr.transportType]}
-            </span>
-          </div>
-          <div style={{ display: 'flex', gap: 20, fontSize: 13, color: '#6b7280' }}>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Calendar size={13} /> Погрузка: {rr.loadingDate}
-            </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Clock size={13} /> Дедлайн: {rr.deadline}
-            </span>
-            <span style={{ display: 'flex', alignItems: 'center', gap: 4 }}>
-              <Package size={13} /> {rr.weight.toLocaleString()} кг · {rr.volume} м³
-            </span>
-          </div>
+          <h1 className="text-2xl font-bold font-mono mb-1">{rr.from} → {rr.to}</h1>
+          <p className="text-sm text-muted-foreground">
+            {TRANSPORT_LABELS[rr.transportType]} · Создан {rr.createdAt}
+          </p>
         </div>
-        {winnerId && (
-          <span style={{ padding: '6px 14px', borderRadius: 10, background: '#f5f3ff', color: '#7c3aed', fontWeight: 600, fontSize: 13, display: 'flex', alignItems: 'center', gap: 6 }}>
-            <Trophy size={14} /> Победитель выбран
+        <div className="flex items-center gap-2">
+          <span className={cn(
+            'inline-flex items-center px-3 py-1 rounded-full text-xs font-semibold border',
+            STATUS_COLORS[rr.status]
+          )}>
+            {rr.status === 'open' ? 'Открыт' : 'Закрыт'}
           </span>
-        )}
-      </div>
-
-      <div style={{ display: 'grid', gridTemplateColumns: '1fr 300px', gap: 20 }}>
-        {/* Responses */}
-        <div>
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 14 }}>
-            <h2 style={{ margin: 0, fontSize: 16, fontWeight: 700 }}>
-              Ответы ({rr.responses.length}/{rr.invitedContractors.length})
-            </h2>
-          </div>
-
-          {rr.responses.length === 0 ? (
-            <div style={{ textAlign: 'center', padding: '40px 0', color: '#9ca3af', background: '#fff', borderRadius: 10, border: '1px solid #e5e9f0' }}>
-              <Clock size={32} style={{ marginBottom: 8, opacity: 0.5 }} />
-              <div>Ответов пока нет</div>
-              <div style={{ fontSize: 13, marginTop: 4 }}>Ожидаем ответы от подрядчиков</div>
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
-              {rr.responses.map(resp => {
-                const isWinner = winnerId === resp.id;
-                return (
-                  <div key={resp.id} style={{
-                    background: '#fff', borderRadius: 10, padding: '16px 20px',
-                    border: `2px solid ${isWinner ? '#7c3aed' : '#e5e9f0'}`,
-                    boxShadow: isWinner ? '0 0 0 4px #f5f3ff' : 'none',
-                  }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', marginBottom: 12 }}>
-                      <div>
-                        <div style={{ fontWeight: 700, fontSize: 15, marginBottom: 4, display: 'flex', alignItems: 'center', gap: 8 }}>
-                          {isWinner && <Trophy size={15} color="#7c3aed" />}
-                          {resp.contractorName}
-                        </div>
-                        <div style={{ fontSize: 13, color: '#6b7280' }}>
-                          {new Date(resp.respondedAt).toLocaleDateString('ru', { day: '2-digit', month: 'short', hour: '2-digit', minute: '2-digit' })}
-                        </div>
-                      </div>
-                      {statusBadge(isWinner ? 'winner' : resp.status)}
-                    </div>
-
-                    <div style={{ display: 'flex', gap: 24, marginBottom: 12 }}>
-                      <div>
-                        <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 2 }}>СТАВКА</div>
-                        <div style={{ fontSize: 22, fontWeight: 700, color: '#111' }}>
-                          {resp.amount.toLocaleString()} <span style={{ fontSize: 14, color: '#6b7280' }}>{resp.currency}</span>
-                        </div>
-                      </div>
-                      <div>
-                        <div style={{ fontSize: 12, color: '#9ca3af', marginBottom: 2 }}>СРОК</div>
-                        <div style={{ fontSize: 18, fontWeight: 600 }}>{resp.transitDays} дн.</div>
-                      </div>
-                    </div>
-
-                    {resp.comment && (
-                      <div style={{ fontSize: 13, color: '#6b7280', background: '#f9fafb', padding: '8px 12px', borderRadius: 6, marginBottom: 12 }}>
-                        {resp.comment}
-                      </div>
-                    )}
-
-                    {!winnerId && (
-                      <button onClick={() => selectWinner(resp.id)} style={btnWinner}>
-                        <Trophy size={14} /> Выбрать победителем
-                      </button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
+          {winnerId && (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-purple-50 text-purple-700 border border-purple-200">
+              <Trophy size={12} /> Победитель выбран
+            </span>
           )}
-
-          {/* Awaiting */}
-          {contractors.filter(c => !rr.responses.find(r => r.contractorId === c.id)).length > 0 && (
-            <div style={{ marginTop: 16 }}>
-              <h3 style={{ fontSize: 14, fontWeight: 600, color: '#6b7280', marginBottom: 10 }}>Ожидают ответа:</h3>
-              {contractors.filter(c => !rr.responses.find(r => r.contractorId === c.id)).map(c => (
-                <div key={c.id} style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '8px 0', fontSize: 13, color: '#6b7280', borderBottom: '1px solid #f3f4f6' }}>
-                  <Clock size={13} color="#f59e0b" />
-                  {c.name}
-                </div>
-              ))}
-            </div>
+          <Button onClick={sendViaTelegram} disabled={tgSending} className="gap-1.5">
+            {tgSending ? <Loader2 size={14} className="animate-spin" /> : <Send size={14} />}
+            Отправить в Telegram
+          </Button>
+          {tgResult && (
+            <span className={cn(
+              'text-xs font-medium px-2.5 py-1 rounded-full border',
+              tgResult.failed === 0 ? 'bg-green-50 text-green-700 border-green-200' : 'bg-red-50 text-red-700 border-red-200'
+            )}>
+              {tgResult.failed === 0 ? `✓ Отправлено ${tgResult.sent}` : `${tgResult.sent} ок · ${tgResult.failed} ошибок`}
+            </span>
           )}
         </div>
-
-        {/* Sidebar */}
-        <div>
-          {/* Public link */}
-          <div style={{ background: '#fff', borderRadius: 10, padding: 16, border: '1px solid #e5e9f0', marginBottom: 16 }}>
-            <h3 style={{ margin: '0 0 10px', fontSize: 14, fontWeight: 600 }}>Публичная ссылка</h3>
-            <p style={{ fontSize: 12, color: '#6b7280', margin: '0 0 10px' }}>
-              Отправьте подрядчику — он сможет ответить без логина
-            </p>
-            <div style={{ display: 'flex', gap: 6 }}>
-              <input readOnly value={publicLink} style={{ ...inputStyle, flex: 1, fontSize: 11, color: '#6b7280' }} />
-              <button onClick={copyLink} style={btnIcon}>
-                {copied ? <CheckCircle2 size={16} color="#10b981" /> : <Copy size={16} />}
-              </button>
-            </div>
-          </div>
-
-          {/* Invited */}
-          <div style={{ background: '#fff', borderRadius: 10, padding: 16, border: '1px solid #e5e9f0' }}>
-            <h3 style={{ margin: '0 0 12px', fontSize: 14, fontWeight: 600 }}>Приглашены ({contractors.length})</h3>
-            {contractors.map(c => {
-              const resp = rr.responses.find(r => r.contractorId === c.id);
-              return (
-                <div key={c.id} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '6px 0', borderBottom: '1px solid #f9fafb', fontSize: 13 }}>
-                  <span>{c.name}</span>
-                  {resp ? (
-                    winnerId === resp.id
-                      ? <Trophy size={13} color="#7c3aed" />
-                      : <CheckCircle2 size={13} color="#10b981" />
-                  ) : (
-                    <Clock size={13} color="#f59e0b" />
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </div>
       </div>
+
+      {/* Info grid */}
+      <Card className="mb-6">
+        <CardHeader className="pb-3">
+          <CardTitle className="text-sm">Параметры запроса</CardTitle>
+        </CardHeader>
+        <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-x-6 gap-y-4">
+            {fields.map(f => (
+              <div key={f.label}>
+                <p className="text-xs text-muted-foreground mb-0.5">{f.label}</p>
+                <p className="text-sm font-medium">{f.value}</p>
+              </div>
+            ))}
+          </div>
+        </CardContent>
+      </Card>
+
+      {/* Contractor requests table */}
+      <Card>
+        <CardHeader className="pb-3 flex flex-row items-center justify-between">
+          <CardTitle className="text-sm flex items-center gap-2">
+            Запросы подрядчикам
+            <span className="text-muted-foreground font-normal">
+              ({responses.length}/{rr.invitedContractors.length} ответов)
+            </span>
+            {newIds.size > 0 && (
+              <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-xs font-semibold bg-green-50 text-green-700 border border-green-200 animate-pulse">
+                <Bell size={11} /> {newIds.size} новый ответ
+              </span>
+            )}
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="p-0">
+          <div className="overflow-x-auto">
+            <table className="w-full text-sm">
+              <thead>
+                <tr className="border-b bg-muted/30">
+                  <th className="text-left text-xs font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Подрядчик</th>
+                  <th className="text-left text-xs font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Дата запроса</th>
+                  <th className="text-right text-xs font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Ставка</th>
+                  <th className="text-right text-xs font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Транзит (дни)</th>
+                  <th className="text-left text-xs font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Срок действия ставки</th>
+                  <th className="text-left text-xs font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Комментарий</th>
+                  <th className="text-center text-xs font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Рейтинг</th>
+                  <th className="text-center text-xs font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Статус</th>
+                  <th className="text-center text-xs font-medium text-muted-foreground px-4 py-2.5 whitespace-nowrap">Действие</th>
+                </tr>
+              </thead>
+              <tbody>
+                {tableRows.map(({ contractor: c, resp }) => {
+                  const isWinner = resp && winnerId === resp.id;
+                  return (
+                    <tr
+                      key={c.id}
+                      className={cn(
+                        'border-b last:border-0 transition-colors',
+                        isWinner ? 'bg-purple-50/60' :
+                        resp && newIds.has(resp.id) ? 'bg-green-50/70' :
+                        'hover:bg-muted/20'
+                      )}
+                    >
+                      <td className="px-4 py-3">
+                        <div className="flex items-center gap-1.5">
+                          {isWinner && <Trophy size={12} className="text-purple-600 shrink-0" />}
+                          <span className="font-medium">{c.name}</span>
+                          {resp && newIds.has(resp.id) && (
+                            <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-green-500 text-white">NEW</span>
+                          )}
+                        </div>
+                        <p className="text-xs text-muted-foreground mt-0.5">{c.country}</p>
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground text-xs whitespace-nowrap">
+                        {resp
+                          ? new Date(resp.respondedAt).toLocaleDateString('ru', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })
+                          : rr.createdAt
+                        }
+                      </td>
+                      <td className="px-4 py-3 text-right whitespace-nowrap">
+                        {resp ? (
+                          <span className="font-semibold">{resp.amount.toLocaleString()} {resp.currency}</span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-right">
+                        {resp ? (
+                          <span>{resp.transitDays}</span>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-muted-foreground text-xs">
+                        {resp ? `${rr.deadline}` : '—'}
+                      </td>
+                      <td className="px-4 py-3 max-w-[200px]">
+                        {resp?.comment ? (
+                          <p className="text-xs text-muted-foreground truncate" title={resp.comment}>{resp.comment}</p>
+                        ) : (
+                          <span className="text-muted-foreground">—</span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        <span className="text-xs font-medium">{c.rating.toFixed(1)}</span>
+                        <span className="text-muted-foreground text-xs"> ★</span>
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {resp ? (
+                          <span className={cn(
+                            'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border',
+                            RESP_STATUS_COLORS[isWinner ? 'winner' : resp.status]
+                          )}>
+                            {RESP_STATUS_LABELS[isWinner ? 'winner' : resp.status]}
+                          </span>
+                        ) : (
+                          <span className={cn(
+                            'inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border',
+                            RESP_STATUS_COLORS['pending']
+                          )}>
+                            {RESP_STATUS_LABELS['pending']}
+                          </span>
+                        )}
+                      </td>
+                      <td className="px-4 py-3 text-center">
+                        {resp && !winnerId && (
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            className="text-xs h-7 px-2.5"
+                            onClick={() => selectWinner(resp.id)}
+                          >
+                            <Trophy size={11} /> Выбрать
+                          </Button>
+                        )}
+                        {isWinner && (
+                          <span className="text-xs text-purple-600 font-semibold">Победитель</span>
+                        )}
+                        {!resp && (
+                          <span className="text-xs text-muted-foreground">Ожидание</span>
+                        )}
+                      </td>
+                    </tr>
+                  );
+                })}
+                {tableRows.length === 0 && (
+                  <tr>
+                    <td colSpan={9} className="px-4 py-10 text-center text-muted-foreground text-sm">
+                      Нет приглашённых подрядчиков
+                    </td>
+                  </tr>
+                )}
+                {unknownRows.map(resp => (
+                  <tr key={resp.id} className={cn(
+                    'border-b last:border-0 transition-colors',
+                    newIds.has(resp.id) ? 'bg-green-50/70' : 'hover:bg-muted/20'
+                  )}>
+                    <td className="px-4 py-3">
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-medium">{resp.contractorName}</span>
+                        {newIds.has(resp.id) && (
+                          <span className="text-[10px] font-bold px-1.5 py-0.5 rounded-full bg-green-500 text-white">NEW</span>
+                        )}
+                      </div>
+                      <p className="text-xs text-muted-foreground mt-0.5">Внешний подрядчик</p>
+                    </td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs whitespace-nowrap">
+                      {new Date(resp.respondedAt).toLocaleDateString('ru', { day: '2-digit', month: '2-digit', year: '2-digit', hour: '2-digit', minute: '2-digit' })}
+                    </td>
+                    <td className="px-4 py-3 text-right whitespace-nowrap">
+                      <span className="font-semibold">{resp.amount.toLocaleString()} {resp.currency}</span>
+                    </td>
+                    <td className="px-4 py-3 text-right">{resp.transitDays}</td>
+                    <td className="px-4 py-3 text-muted-foreground text-xs">—</td>
+                    <td className="px-4 py-3 max-w-[200px]">
+                      {resp.comment ? <p className="text-xs text-muted-foreground truncate">{resp.comment}</p> : <span className="text-muted-foreground">—</span>}
+                    </td>
+                    <td className="px-4 py-3 text-center text-muted-foreground">—</td>
+                    <td className="px-4 py-3 text-center">
+                      <span className={cn('inline-flex items-center px-2 py-0.5 rounded-full text-xs font-medium border', RESP_STATUS_COLORS['responded'])}>
+                        {RESP_STATUS_LABELS['responded']}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-center">
+                      {!winnerId && (
+                        <Button size="sm" variant="outline" className="text-xs h-7 px-2.5" onClick={() => selectWinner(resp.id)}>
+                          <Trophy size={11} /> Выбрать
+                        </Button>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </CardContent>
+      </Card>
     </div>
   );
 }
-
-const btnGhost: React.CSSProperties = { background: 'transparent', border: 'none', fontSize: 13, cursor: 'pointer', color: '#6b7280', padding: 0 };
-const btnWinner: React.CSSProperties = { display: 'flex', alignItems: 'center', gap: 6, background: '#f5f3ff', color: '#7c3aed', border: '1px solid #ddd6fe', borderRadius: 8, padding: '7px 14px', fontSize: 13, fontWeight: 600, cursor: 'pointer' };
-const btnIcon: React.CSSProperties = { background: '#f3f4f6', border: 'none', borderRadius: 6, padding: '6px 8px', cursor: 'pointer', display: 'flex', alignItems: 'center' };
-const inputStyle: React.CSSProperties = { border: '1px solid #e5e7eb', borderRadius: 8, padding: '7px 10px', fontSize: 13, outline: 'none', background: '#fff', width: '100%', boxSizing: 'border-box' };

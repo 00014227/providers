@@ -137,7 +137,22 @@ export default function PublicRatePage() {
 
           <div style={{ display: 'flex', gap: 10 }}>
             <button
-              onClick={() => { if (amount && transitDays) setSubmitted(true); }}
+              onClick={() => {
+                if (!amount || !transitDays) return;
+                fetch('http://165.245.217.29:3000/api/telegram/responses', {
+                  method: 'POST',
+                  headers: { 'Content-Type': 'application/json' },
+                  body: JSON.stringify({
+                    token: rr.token,
+                    contractorName: 'Подрядчик',
+                    amount: parseFloat(amount),
+                    currency,
+                    transitDays: parseInt(transitDays),
+                    comment,
+                  }),
+                }).catch(() => {});
+                setSubmitted(true);
+              }}
               disabled={!amount || !transitDays}
               style={{ ...btnPrimary, flex: 1, opacity: (!amount || !transitDays) ? 0.5 : 1, justifyContent: 'center' }}
             >
