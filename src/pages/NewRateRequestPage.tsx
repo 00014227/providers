@@ -166,8 +166,9 @@ export default function NewRateRequestPage() {
   const canNext1 = form.fromCity && form.toCity && form.loadingDate && form.weightKg;
   const canNext2 = form.selectedContractors.length > 0;
 
-  const buildMessage = (contactName?: string) => {
-    const firstName = contactName?.split(' ')[0] ?? '';
+  const buildMessage = (contactName: string, token: string) => {
+    const firstName = contactName.split(' ')[0] ?? '';
+    const link = `${window.location.origin}/rate/${token}`;
     return [
       `Добрый день${firstName ? `, ${firstName}` : ''}! 👋`,
       ``,
@@ -184,17 +185,40 @@ export default function NewRateRequestPage() {
       form.specialConditions ? `⚠️ Особые условия: ${form.specialConditions}` : '',
       form.comment ? `💬 ${form.comment}` : '',
       ``,
-      `Если вам удобно — пожалуйста, скиньте вашу ставку в ответ. Будем очень признательны! 🙏`,
+      `Если вам удобно — оставьте вашу ставку по ссылке: ${link}`,
+      ``,
+      `Будем очень признательны! 🙏`,
     ].filter(Boolean).join('\n');
   };
 
   const handleSend = async () => {
     setSending(true);
+    // Generate token and save rate request to mock data
+    const token = `tok-${Date.now()}`;
+    const newRR = {
+      id: `r-${Date.now()}`,
+      token,
+      from: form.fromCity,
+      to: form.toCity,
+      transportType: (form.vehicleType.startsWith('container') || form.vehicleType === 'rail_wagon' ? 'rail' : 'auto') as import('../data/mock').TransportType,
+      weight: parseFloat(form.weightKg) || 0,
+      volume: 0,
+      loadingDate: form.loadingDate,
+      deadline: form.loadingDate,
+      comment: form.comment,
+      status: 'open' as const,
+      createdAt: new Date().toISOString().split('T')[0],
+      invitedContractors: form.selectedContractors,
+      responses: [],
+    };
+    const { RATE_REQUESTS } = await import('../data/mock');
+    RATE_REQUESTS.push(newRR);
+
     try {
       const selectedList = CONTRACTORS.filter(c => form.selectedContractors.includes(c.id));
       const recipients = selectedList.flatMap(c =>
         c.contacts.filter(ct => ct.telegram)
-          .map(ct => ({ username: ct.telegram!, message: buildMessage(ct.name) }))
+          .map(ct => ({ username: ct.telegram!, message: buildMessage(ct.name, token) }))
       );
       if (recipients.length === 0) {
         alert('У выбранных подрядчиков нет Telegram контактов');
@@ -204,7 +228,7 @@ export default function NewRateRequestPage() {
       const res = await fetch('https://165-245-217-29.nip.io/api/telegram/send-rate-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ recipients, delayMs: 5000 }),
+        body: JSON.stringify({ recipients, delayMs: 3000 }),
       });
       const data = await res.json();
       setSendResult({ sent: data.sent, failed: data.failed });
