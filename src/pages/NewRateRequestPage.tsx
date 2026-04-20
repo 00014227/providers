@@ -193,20 +193,23 @@ export default function NewRateRequestPage() {
   const handleSend = async () => {
     setSending(true);
     const token = `tok-${Date.now()}`;
-    const payload = {
-      token,
-      from: form.fromCity,
-      to: form.toCity,
-      weight: form.weightKg,
-      loadingDate: form.loadingDate,
-      comment: form.comment,
-      incoterms: form.incoterms,
-      specialConditions: form.specialConditions,
-      currency: form.currency,
-      vehicleType: form.vehicleType,
-    };
-    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
-    const rateLink = `${window.location.origin}/rate/${token}?d=${encoded}`;
+    await fetch('https://165-245-217-29.nip.io/api/telegram/rate-requests', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        token,
+        from: form.fromCity,
+        to: form.toCity,
+        weight: form.weightKg,
+        loadingDate: form.loadingDate,
+        comment: form.comment,
+        incoterms: form.incoterms,
+        specialConditions: form.specialConditions,
+        currency: form.currency,
+        vehicleType: form.vehicleType,
+      }),
+    }).catch(() => {});
+    const rateLink = `${window.location.origin}/rate/${token}`;
 
     try {
       const selectedList = CONTRACTORS.filter(c => form.selectedContractors.includes(c.id));

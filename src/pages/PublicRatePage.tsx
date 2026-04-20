@@ -1,21 +1,21 @@
 import { useParams } from 'react-router-dom';
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { MapPin, Package, Calendar, Truck, CheckCircle2, XCircle } from 'lucide-react';
 import { RATE_REQUESTS, TRANSPORT_LABELS } from '../data/mock';
 
 export default function PublicRatePage() {
   const { token } = useParams();
-  const params = new URLSearchParams(window.location.search);
-  const encoded = params.get('d');
+  const [rr, setRr] = useState<any>(() => RATE_REQUESTS.find(r => r.token === token) ?? null);
+  const [loading, setLoading] = useState(!rr);
 
-  // Try to decode from URL first, then fall back to mock data
-  let rr: any = RATE_REQUESTS.find(r => r.token === token);
-  if (!rr && encoded) {
-    try {
-      const decoded = JSON.parse(decodeURIComponent(escape(atob(encoded))));
-      rr = { ...decoded, id: decoded.token, from: decoded.from, to: decoded.to };
-    } catch {}
-  }
+  useEffect(() => {
+    if (rr) return;
+    fetch(`https://165-245-217-29.nip.io/api/telegram/rate-requests/${token}`)
+      .then(r => r.json())
+      .then(data => { if (data && !data.error) setRr(data); })
+      .catch(() => {})
+      .finally(() => setLoading(false));
+  }, [token]);
 
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('USD');
@@ -23,6 +23,12 @@ export default function PublicRatePage() {
   const [comment, setComment] = useState('');
   const [submitted, setSubmitted] = useState(false);
   const [declined, setDeclined] = useState(false);
+
+  if (loading) return (
+    <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f5f6fa' }}>
+      <div style={{ textAlign: 'center', color: '#6b7280', fontSize: 14 }}>Загрузка...</div>
+    </div>
+  );
 
   if (!rr) return (
     <div style={{ minHeight: '100vh', display: 'flex', alignItems: 'center', justifyContent: 'center', background: '#f5f6fa' }}>
