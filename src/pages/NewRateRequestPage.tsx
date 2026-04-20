@@ -166,9 +166,8 @@ export default function NewRateRequestPage() {
   const canNext1 = form.fromCity && form.toCity && form.loadingDate && form.weightKg;
   const canNext2 = form.selectedContractors.length > 0;
 
-  const buildMessage = (contactName: string, token: string) => {
+  const buildMessage = (contactName: string, link: string) => {
     const firstName = contactName.split(' ')[0] ?? '';
-    const link = `${window.location.origin}/rate/${token}`;
     return [
       `Добрый день${firstName ? `, ${firstName}` : ''}! 👋`,
       ``,
@@ -193,32 +192,27 @@ export default function NewRateRequestPage() {
 
   const handleSend = async () => {
     setSending(true);
-    // Generate token and save rate request to mock data
     const token = `tok-${Date.now()}`;
-    const newRR = {
-      id: `r-${Date.now()}`,
+    const payload = {
       token,
       from: form.fromCity,
       to: form.toCity,
-      transportType: (form.vehicleType.startsWith('container') || form.vehicleType === 'rail_wagon' ? 'rail' : 'auto') as import('../data/mock').TransportType,
-      weight: parseFloat(form.weightKg) || 0,
-      volume: 0,
+      weight: form.weightKg,
       loadingDate: form.loadingDate,
-      deadline: form.loadingDate,
       comment: form.comment,
-      status: 'open' as const,
-      createdAt: new Date().toISOString().split('T')[0],
-      invitedContractors: form.selectedContractors,
-      responses: [],
+      incoterms: form.incoterms,
+      specialConditions: form.specialConditions,
+      currency: form.currency,
+      vehicleType: form.vehicleType,
     };
-    const { RATE_REQUESTS } = await import('../data/mock');
-    RATE_REQUESTS.push(newRR);
+    const encoded = btoa(unescape(encodeURIComponent(JSON.stringify(payload))));
+    const rateLink = `${window.location.origin}/rate/${token}?d=${encoded}`;
 
     try {
       const selectedList = CONTRACTORS.filter(c => form.selectedContractors.includes(c.id));
       const recipients = selectedList.flatMap(c =>
         c.contacts.filter(ct => ct.telegram)
-          .map(ct => ({ username: ct.telegram!, message: buildMessage(ct.name, token) }))
+          .map(ct => ({ username: ct.telegram!, message: buildMessage(ct.name, rateLink) }))
       );
       if (recipients.length === 0) {
         alert('У выбранных подрядчиков нет Telegram контактов');

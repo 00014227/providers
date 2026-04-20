@@ -1,12 +1,21 @@
-import { useParams, useNavigate } from 'react-router-dom';
+import { useParams } from 'react-router-dom';
 import { useState } from 'react';
 import { MapPin, Package, Calendar, Truck, CheckCircle2, XCircle } from 'lucide-react';
 import { RATE_REQUESTS, TRANSPORT_LABELS } from '../data/mock';
 
 export default function PublicRatePage() {
   const { token } = useParams();
-  const navigate = useNavigate();
-  const rr = RATE_REQUESTS.find(r => r.token === token);
+  const params = new URLSearchParams(window.location.search);
+  const encoded = params.get('d');
+
+  // Try to decode from URL first, then fall back to mock data
+  let rr: any = RATE_REQUESTS.find(r => r.token === token);
+  if (!rr && encoded) {
+    try {
+      const decoded = JSON.parse(decodeURIComponent(escape(atob(encoded))));
+      rr = { ...decoded, id: decoded.token, from: decoded.from, to: decoded.to };
+    } catch {}
+  }
 
   const [amount, setAmount] = useState('');
   const [currency, setCurrency] = useState('USD');
@@ -69,7 +78,7 @@ export default function PublicRatePage() {
               <strong>{rr.from}</strong> → <strong>{rr.to}</strong>
             </InfoRow>
             <InfoRow icon={<Truck size={14} color="#6b7280" />} label="Транспорт">
-              {TRANSPORT_LABELS[rr.transportType]}
+              {TRANSPORT_LABELS[rr.transportType as keyof typeof TRANSPORT_LABELS] ?? rr.transportType ?? '—'}
             </InfoRow>
             <InfoRow icon={<Package size={14} color="#6b7280" />} label="Груз">
               {rr.weight.toLocaleString()} кг {rr.volume ? `· ${rr.volume} м³` : ''}
@@ -143,7 +152,7 @@ export default function PublicRatePage() {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({
-                    token: rr.token,
+                    token: token,
                     contractorName: 'Подрядчик',
                     amount: parseFloat(amount),
                     currency,
