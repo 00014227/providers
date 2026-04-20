@@ -139,7 +139,7 @@ export default function PublicRatePage() {
             <button
               onClick={() => {
                 if (!amount || !transitDays) return;
-                fetch('http://165.245.217.29:3000/api/telegram/responses', {
+                fetch('https://165-245-217-29.nip.io/api/telegram/responses', {
                   method: 'POST',
                   headers: { 'Content-Type': 'application/json' },
                   body: JSON.stringify({

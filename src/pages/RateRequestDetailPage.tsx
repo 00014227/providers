@@ -42,7 +42,7 @@ export default function RateRequestDetailPage() {
   useEffect(() => {
     const check = async () => {
       try {
-        const res = await fetch(`http://165.245.217.29:3000/api/telegram/responses/${rr?.token}`);
+        const res = await fetch(`https://165-245-217-29.nip.io/api/telegram/responses/${rr?.token}`);
         const data: typeof baseResponses = await res.json();
         setExtraResponses(data);
         const fresh = data.filter(r => !seenIds.current.has(r.id));
@@ -93,7 +93,7 @@ export default function RateRequestDetailPage() {
     setTgSending(true);
     setTgResult(null);
     try {
-      const res = await fetch('http://165.245.217.29:3000/api/telegram/send-rate-request', {
+      const res = await fetch('https://165-245-217-29.nip.io/api/telegram/send-rate-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ recipients }),

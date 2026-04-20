@@ -201,7 +201,7 @@ export default function NewRateRequestPage() {
         setSending(false);
         return;
       }
-      const res = await fetch('http://165.245.217.29:3000/api/telegram/send-rate-request', {
+      const res = await fetch('https://165-245-217-29.nip.io/api/telegram/send-rate-request', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ recipients, delayMs: 5000 }),
